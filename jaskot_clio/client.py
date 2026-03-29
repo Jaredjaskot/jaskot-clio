@@ -196,16 +196,14 @@ class ClioClient:
     # ------------------------------------------------------------------
 
     def search_matters(self, query: str, *, limit: int = 20) -> list[dict]:
-        """Search matters by query string."""
-        resp = self._request(
-            "GET", "matters",
-            params={
-                "query": query,
-                "fields": "id,display_number,description,client{id,name},status,practice_area{name}",
-                "limit": limit,
-            },
+        """Search matters by query string. Returns [] on failure."""
+        data = self._get_json(
+            "matters",
+            query=query,
+            fields="id,display_number,description,client{id,name},status,practice_area{name}",
+            limit=limit,
         )
-        return resp.json().get("data", [])
+        return data.get("data", []) if data else []
 
     def get_matter_by_number(self, display_number: str) -> Optional[dict]:
         """Find a matter by exact display number (falls back to first result)."""
@@ -216,15 +214,13 @@ class ClioClient:
         return matters[0] if matters else None
 
     def get_matter_details(self, matter_id: int) -> Optional[dict]:
-        """Fetch full details for a single matter."""
-        resp = self._request(
-            "GET", f"matters/{matter_id}",
-            params={
-                "fields": "id,display_number,description,status,client{id,name},"
-                          "practice_area{name},opened_date,closed_date,pending_date",
-            },
+        """Fetch full details for a single matter. Returns None on failure."""
+        data = self._get_json(
+            f"matters/{matter_id}",
+            fields="id,display_number,description,status,client{id,name},"
+                   "practice_area{name},opened_date,closed_date,pending_date",
         )
-        return resp.json().get("data")
+        return data.get("data") if data else None
 
     def search_matters_by_contact(self, contact_id: int, *, status: str = "open") -> list[dict]:
         """Find matters belonging to a contact, filtered by status."""
@@ -351,17 +347,15 @@ class ClioClient:
     # ------------------------------------------------------------------
 
     def get_matter_notes(self, matter_id: int, *, limit: int = 50) -> list[dict]:
-        """List notes for a matter, newest first."""
-        resp = self._request(
-            "GET", "notes",
-            params={
-                "matter_id": matter_id,
-                "order": "date(desc)",
-                "limit": limit,
-                "fields": "id,subject,detail,date,user{name},created_at",
-            },
+        """List notes for a matter, newest first. Returns [] on failure."""
+        data = self._get_json(
+            "notes",
+            matter_id=matter_id,
+            order="date(desc)",
+            limit=limit,
+            fields="id,subject,detail,date,user{name},created_at",
         )
-        return resp.json().get("data", [])
+        return data.get("data", []) if data else []
 
     def find_note_by_subject(self, matter_id: int, subject: str) -> Optional[dict]:
         """Find an existing note on a matter by exact subject match (for dedup)."""
@@ -397,41 +391,51 @@ class ClioClient:
     # ------------------------------------------------------------------
 
     def get_matter_activities(self, matter_id: int, *, limit: int = 50) -> list[dict]:
-        """List activities (time entries) for a matter."""
-        resp = self._request(
-            "GET", "activities",
-            params={
-                "matter_id": matter_id,
-                "order": "date(desc)",
-                "limit": limit,
-                "fields": "id,type,date,quantity,note,user{name},created_at",
-            },
+        """List activities (time entries) for a matter. Returns [] on failure."""
+        data = self._get_json(
+            "activities",
+            matter_id=matter_id,
+            order="date(desc)",
+            limit=limit,
+            fields="id,type,date,quantity,note,user{name},created_at",
         )
-        return resp.json().get("data", [])
+        return data.get("data", []) if data else []
 
     def log_activity(
         self,
         matter_id: int,
         user_id: int,
         description: str,
-        activity_type: str,
-        started_at: str,
+        activity_type: str = "TimeEntry",
+        started_at: str = "",
         *,
         ended_at: str = "",
         notes: str = "",
     ) -> dict:
-        """Log a time entry / activity."""
+        """Log a time entry / activity.
+
+        Args:
+            activity_type: Clio activity type (e.g. "TimeEntry", "ExpenseEntry").
+            started_at: ISO datetime or date string. Used for the ``date`` field
+                (truncated to YYYY-MM-DD) and the ``started_at`` field if provided.
+            ended_at: ISO datetime string for the ``ended_at`` field.
+        """
+        note_text = f"{description}\n{notes}".strip() if notes else description
+        date = started_at[:10] if started_at else ""
         payload: dict[str, Any] = {
             "data": {
-                "type": "TimeEntry",
-                "date": started_at[:10],
-                "note": description,
+                "type": activity_type,
+                "note": note_text,
                 "matter": {"id": matter_id},
                 "user": {"id": user_id},
             }
         }
-        if notes:
-            payload["data"]["note"] = f"{description}\n{notes}"
+        if date:
+            payload["data"]["date"] = date
+        if started_at:
+            payload["data"]["started_at"] = started_at
+        if ended_at:
+            payload["data"]["ended_at"] = ended_at
 
         resp = self._request("POST", "activities", json=payload)
         return resp.json().get("data", {})
@@ -441,34 +445,30 @@ class ClioClient:
     # ------------------------------------------------------------------
 
     def get_matter_transactions(self, matter_id: int, *, limit: int = 50) -> list[dict]:
-        """List bills/transactions for a matter."""
-        resp = self._request(
-            "GET", "bills",
-            params={
-                "matter_id": matter_id,
-                "order": "issued_date(desc)",
-                "limit": limit,
-                "fields": "id,type,total,state,description,issued_date,due_date",
-            },
+        """List bills/transactions for a matter. Returns [] on failure."""
+        data = self._get_json(
+            "bills",
+            matter_id=matter_id,
+            order="issued_date(desc)",
+            limit=limit,
+            fields="id,type,total,state,description,issued_date,due_date",
         )
-        return resp.json().get("data", [])
+        return data.get("data", []) if data else []
 
     # ------------------------------------------------------------------
     # Documents
     # ------------------------------------------------------------------
 
     def get_matter_documents(self, matter_id: int, *, limit: int = 50) -> list[dict]:
-        """List documents attached to a matter."""
-        resp = self._request(
-            "GET", "documents",
-            params={
-                "matter_id": matter_id,
-                "order": "created_at(desc)",
-                "limit": limit,
-                "fields": "id,name,created_at,updated_at,latest_document_version{id}",
-            },
+        """List documents attached to a matter. Returns [] on failure."""
+        data = self._get_json(
+            "documents",
+            matter_id=matter_id,
+            order="created_at(desc)",
+            limit=limit,
+            fields="id,name,created_at,updated_at,latest_document_version{id}",
         )
-        return resp.json().get("data", [])
+        return data.get("data", []) if data else []
 
     def upload_document(self, matter_id: int, filename: str, file_content: bytes) -> dict:
         """Create a document record and upload the file (two-step)."""
