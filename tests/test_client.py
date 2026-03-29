@@ -82,9 +82,9 @@ class TestAuth:
 
     @responses.activate
     def test_bearer_no_refresh_on_401(self, bearer_client):
+        """Bearer mode returns empty on 401 (no refresh available)."""
         responses.add(responses.GET, f"{API}/matters", status=401)
-        with pytest.raises(Exception):
-            bearer_client.search_matters("test")
+        assert bearer_client.search_matters("test") == []
 
     @responses.activate
     def test_exchange_code(self, tmp_path):
@@ -272,6 +272,42 @@ class TestActivities:
         result = client.log_activity(123, 1, "Review docs", "Research", "2026-03-25T10:00:00")
         assert result["id"] == 5
 
+    @responses.activate
+    def test_log_activity_uses_activity_type(self, client):
+        responses.add(responses.POST, f"{API}/activities", json={"data": {"id": 6}})
+        client.log_activity(123, 1, "Mileage", "ExpenseEntry", "2026-03-25")
+        body = json.loads(responses.calls[-1].request.body)
+        assert body["data"]["type"] == "ExpenseEntry"
+
+    @responses.activate
+    def test_log_activity_uses_started_and_ended_at(self, client):
+        responses.add(responses.POST, f"{API}/activities", json={"data": {"id": 7}})
+        client.log_activity(
+            123, 1, "Call", "TimeEntry", "2026-03-25T10:00:00",
+            ended_at="2026-03-25T11:00:00",
+        )
+        body = json.loads(responses.calls[-1].request.body)
+        assert body["data"]["started_at"] == "2026-03-25T10:00:00"
+        assert body["data"]["ended_at"] == "2026-03-25T11:00:00"
+        assert body["data"]["date"] == "2026-03-25"
+
+    @responses.activate
+    def test_log_activity_notes_appended(self, client):
+        responses.add(responses.POST, f"{API}/activities", json={"data": {"id": 8}})
+        client.log_activity(123, 1, "Review", notes="Extra context")
+        body = json.loads(responses.calls[-1].request.body)
+        assert body["data"]["note"] == "Review\nExtra context"
+
+    @responses.activate
+    def test_log_activity_defaults(self, client):
+        """log_activity with minimal args uses TimeEntry type."""
+        responses.add(responses.POST, f"{API}/activities", json={"data": {"id": 9}})
+        client.log_activity(123, 1, "Quick note")
+        body = json.loads(responses.calls[-1].request.body)
+        assert body["data"]["type"] == "TimeEntry"
+        assert "started_at" not in body["data"]
+        assert "ended_at" not in body["data"]
+
 
 class TestTransactions:
     @responses.activate
@@ -395,6 +431,54 @@ class TestInterfaceCompatibility:
 # ---------------------------------------------------------------
 # Rate limiting
 # ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
+# Error handling — read methods fail-open
+# ---------------------------------------------------------------
+
+class TestErrorHandling:
+    @responses.activate
+    def test_search_matters_returns_empty_on_error(self, client):
+        responses.add(responses.GET, f"{API}/matters", status=500)
+        assert client.search_matters("test") == []
+
+    @responses.activate
+    def test_get_matter_details_returns_none_on_error(self, client):
+        responses.add(responses.GET, f"{API}/matters/999", status=500)
+        assert client.get_matter_details(999) is None
+
+    @responses.activate
+    def test_get_matter_notes_returns_empty_on_error(self, client):
+        responses.add(responses.GET, f"{API}/notes", status=500)
+        assert client.get_matter_notes(123) == []
+
+    @responses.activate
+    def test_get_matter_activities_returns_empty_on_error(self, client):
+        responses.add(responses.GET, f"{API}/activities", status=500)
+        assert client.get_matter_activities(123) == []
+
+    @responses.activate
+    def test_get_matter_transactions_returns_empty_on_error(self, client):
+        responses.add(responses.GET, f"{API}/bills", status=500)
+        assert client.get_matter_transactions(123) == []
+
+    @responses.activate
+    def test_get_matter_documents_returns_empty_on_error(self, client):
+        responses.add(responses.GET, f"{API}/documents", status=500)
+        assert client.get_matter_documents(123) == []
+
+    @responses.activate
+    def test_lookup_by_matter_returns_not_found_on_error(self, client):
+        responses.add(responses.GET, f"{API}/matters", status=500)
+        result = client.lookup_by_matter("test")
+        assert result["found"] is False
+
+    @responses.activate
+    def test_lookup_contact_by_email_returns_not_found_on_error(self, client):
+        responses.add(responses.GET, f"{API}/contacts", status=500)
+        result = client.lookup_contact_by_email("test@test.com")
+        assert result["found"] is False
+
 
 class TestRateLimiting:
     @responses.activate
