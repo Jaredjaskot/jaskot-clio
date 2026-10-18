@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+import urllib.parse
 from typing import Any, Optional
 
 import requests
@@ -65,12 +66,16 @@ class ClioClient:
                 "contacts:read", "contacts:write",
                 "bills:read",
             ]
-        scope_string = " ".join(scopes)
-        return (
-            f"{self.BASE_URL}/oauth/authorize?"
-            f"response_type=code&client_id={self.client_id}"
-            f"&redirect_uri={self.redirect_uri}&scope={scope_string}"
-        )
+        # access_type=offline is what makes Clio return a refresh_token. Without
+        # it you get a bare 30-day access token that simply dies (YTB-689).
+        query = urllib.parse.urlencode({
+            "response_type": "code",
+            "client_id": self.client_id,
+            "redirect_uri": self.redirect_uri,
+            "scope": " ".join(scopes),
+            "access_type": "offline",
+        })
+        return f"{self.BASE_URL}/oauth/authorize?{query}"
 
     def exchange_code(self, code: str) -> None:
         """Exchange an authorization code for tokens."""
@@ -106,7 +111,12 @@ class ClioClient:
             timeout=10,
         )
         resp.raise_for_status()
-        self.tokens = resp.json()
+        # Merge, don't replace: if Clio's refresh response omits refresh_token we
+        # must keep the one we already hold, or the next refresh has nothing to use.
+        prior_refresh = self.tokens.get("refresh_token")
+        self.tokens = {**self.tokens, **resp.json()}
+        if prior_refresh and not self.tokens.get("refresh_token"):
+            self.tokens["refresh_token"] = prior_refresh
         self._save_tokens()
         logger.info("Refreshed access token")
 
@@ -123,6 +133,8 @@ class ClioClient:
 
     def _save_tokens(self) -> None:
         try:
+            # Stamp issue time so expiry is knowable; Clio only sends expires_in.
+            self.tokens["obtained_at"] = int(time.time())
             with open(self.token_file, "w") as f:
                 json.dump(self.tokens, f)
         except IOError as e:
